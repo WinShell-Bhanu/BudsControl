@@ -60,6 +60,28 @@ if args.contains("--sdp") {
     buds.start()
     DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { exit(0) }
     RunLoop.main.run()
+} else if let i = args.firstIndex(of: "--scan") {
+    // Sends every query once and prints the last reply to each, for diffing between states.
+    let label = args.count > i + 1 ? args[i + 1] : "scan"
+    let buds = BudsController()
+    var replies: [UInt16: [UInt8]] = [:]
+    buds.onFrame = { f in replies[f.command] = f.payload }
+    buds.start()
+    var queries: [(UInt16, [UInt8])] = (UInt16(0x0101)...UInt16(0x0120)).map { ($0, []) }
+    queries.append((0x010C, [0x01, 0x01]))
+    queries.append((0x010D, [0x2F] + Array(UInt8(1)...UInt8(0x2F))))
+    DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+        for (n, q) in queries.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(n) * 0.09) { buds.sendRaw(command: q.0, payload: q.1) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(queries.count) * 0.09 + 2) {
+            for cmd in replies.keys.sorted() {
+                print(label, String(format: "0x%04X", cmd), replies[cmd]!.map { String(format: "%02X", $0) }.joined(separator: " "))
+            }
+            exit(buds.link == .connected ? 0 : 1)
+        }
+    }
+    RunLoop.main.run()
 } else if let i = args.firstIndex(of: "--raw") {
     // Sends each "CMD:PAYLOAD" (hex) argument 2.5 s apart and logs every packet.
     let started = Date()
@@ -83,6 +105,7 @@ if args.contains("--sdp") {
     // Command-line mode for debugging and scripting, e.g.:
     //   BudsControl.app/Contents/MacOS/BudsControl --cli status
     //   BudsControl.app/Contents/MacOS/BudsControl --cli anc|transparency|off|smart|max|moderate|mild
+    //   ... --cli eq=0 | custom=5,0,3,1,4,3 | lowlatency=on | find=on | gesture=left,doubleTap,next
     let action = args.count > i + 1 ? args[i + 1] : "status"
     let buds = BudsController()
     let started = Date()
@@ -99,10 +122,42 @@ if args.contains("--sdp") {
     }
     buds.start()
 
-    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+    // Settings beyond noise control need the buds' current state first, so wait for it.
+    let parts = action.split(separator: "=", maxSplits: 1).map(String.init)
+    if parts.count == 2 {
+        var done = false
+        Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+            guard !done, buds.link == .connected, buds.eqID != nil, !buds.gestures.isEmpty else { return }
+            done = true
+            let value = parts[1]
+            switch parts[0] {
+            case "eq": UInt8(value).map(buds.setEQ)
+            case "custom": buds.setCustomEQ(gains: value.split(separator: ",").compactMap { Int($0) })
+            case "lowlatency": buds.setGameMode(value == "on")
+            case "find": buds.findBuds(value == "on")
+            case "gesture":
+                let g = value.split(separator: ",").map(String.init)
+                if g.count == 3, let side = EarSide.allCases.first(where: { "\($0)" == g[0] }),
+                   let gesture = Gesture.allCases.first(where: { "\($0)" == g[1] }),
+                   let act = GestureAction.allCases.first(where: { "\($0)" == g[2] }) {
+                    buds.setGesture(act, for: gesture, side: side)
+                }
+            default: print("unknown action \(parts[0])")
+            }
+        }
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
         print("device:  \(buds.deviceName) [\(buds.productID ?? "?")] \(buds.link)")
         print("mode:    \(buds.mode?.rawValue ?? "unknown")\(buds.level.map { " (\($0.rawValue))" } ?? "")")
         print("battery: L \(buds.left?.level ?? -1)%  R \(buds.right?.level ?? -1)%  case \(buds.caseBattery?.level ?? -1)%")
+        print("eq:      \(buds.eqID.map(String.init) ?? "?") \(buds.eqChoices.first { $0.id == buds.eqID }?.name ?? "")"
+              + (buds.activeCustomEQ.map { " " + $0.bands.map { "\($0.hz)Hz:\($0.gain)" }.joined(separator: " ") } ?? ""))
+        print("lowlat:  \(buds.gameMode.map { $0 ? "on" : "off" } ?? "?")")
+        for side in EarSide.allCases {
+            print("gesture: \(side) " + Gesture.allCases.map { "\($0)=\(buds.gestures[side]?[$0].map { "\($0)" } ?? "?")" }
+                .joined(separator: " "))
+        }
         exit(buds.link == .connected ? 0 : 1)
     }
     RunLoop.main.run()

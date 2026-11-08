@@ -3,6 +3,7 @@ import SwiftUI
 struct MenuView: View {
     @ObservedObject var buds: BudsController
     @Environment(\.openWindow) private var openWindow
+    @AppStorage("moreExpanded") private var moreExpanded = false
 
     var body: some View {
         // Spacing 0: glass shapes only blend when they touch, so nothing nearby picks up the lens.
@@ -15,6 +16,10 @@ struct MenuView: View {
                         levels.transition(.blurReplace)
                     }
                     batteries
+                    moreToggle
+                    Collapsible(expanded: moreExpanded) {
+                        MoreControls(buds: buds)
+                    }
                 } else {
                     disconnected
                 }
@@ -24,6 +29,26 @@ struct MenuView: View {
         .frame(width: 256)
         .animation(.spring(response: 0.42, dampingFraction: 0.74), value: buds.mode)
         .animation(.snappy(duration: 0.22), value: buds.link)
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: moreExpanded)
+    }
+
+    /// The down arrow that reveals equalizer, low latency, find my earbuds and gestures.
+    private var moreToggle: some View {
+        Button {
+            moreExpanded.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Text(moreExpanded ? "Less" : "More").font(.caption.weight(.medium))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .rotationEffect(.degrees(moreExpanded ? 180 : 0))
+            }
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 18)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(moreExpanded ? "Show fewer controls" : "Show more controls")
     }
 
     // MARK: Header
@@ -92,12 +117,12 @@ struct MenuView: View {
 
     private var levels: some View {
         LiquidSegmented(items: buds.availableLevels, selection: buds.level, height: 22,
-                        onSelect: { buds.setMode(.anc, level: $0) }) { level, selected in
+                        onSelect: { buds.setMode(.anc, level: $0) }, label: { level, selected in
             Text(level.title)
                 .font(.caption2.weight(selected ? .semibold : .medium))
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .lineLimit(1)
-        }
+        }, fitToLabels: true)
     }
 
     // MARK: Battery — one compact line
@@ -154,4 +179,29 @@ private struct BatteryLabel: View {
                 .foregroundStyle(battery.map { $0.level <= 20 && !$0.charging } == true ? .red : .primary)
         }
     }
+}
+
+/// Folds its content open and shut under the toggle, like a disclosure: the height animates
+/// between 0 and the content's natural height, clipped at the bottom edge.
+private struct Collapsible<Content: View>: View {
+    let expanded: Bool
+    @ViewBuilder let content: () -> Content
+    @StateObject private var size = MeasuredHeight()
+
+    var body: some View {
+        content()
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.height = $0 }
+            .opacity(expanded ? 1 : 0)
+            .frame(height: expanded ? size.height : 0, alignment: .top)
+            .clipped()
+            // While folded the stack still adds its spacing; pull it back so the toggle sits at the bottom.
+            .padding(.top, expanded ? 0 : -10)
+            .allowsHitTesting(expanded)
+            .accessibilityHidden(!expanded)
+    }
+}
+
+private final class MeasuredHeight: ObservableObject {
+    @Published var height: CGFloat = 0
 }

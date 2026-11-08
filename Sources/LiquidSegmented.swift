@@ -15,13 +15,31 @@ struct LiquidSegmented<Item: Hashable & Identifiable, Content: View>: View {
     @ViewBuilder let label: (Item, Bool) -> Content
     /// Lets a segment ask for a fixed width (e.g. unselected modes are icon-only).
     var widthFor: (Item, Bool) -> CGFloat? = { _, _ in nil }
+    /// Size segments to their labels and share the leftover width evenly, so the gaps between
+    /// labels match ("Moderate" no longer crowds its neighbours while "Mild" floats).
+    var fitToLabels = false
 
     @Namespace private var space
     @StateObject private var hover = HoverState<Item>()
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(items) { item in
+        Group {
+            if fitToLabels {
+                EvenGapsLayout { segments }
+            } else {
+                HStack(spacing: 0) { segments }
+            }
+        }
+        .background { if let selection { pill(following: selection) } }
+        .padding(3)
+        .background(Capsule().fill(Color.primary.opacity(0.07)))
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .animation(.spring(response: 0.42, dampingFraction: 0.72), value: selection)
+        .animation(.easeOut(duration: 0.15), value: hover.item)
+    }
+
+    private var segments: some View {
+        ForEach(items) { item in
                 let selected = item == selection
                 Button {
                     onSelect(item)
@@ -31,7 +49,7 @@ struct LiquidSegmented<Item: Hashable & Identifiable, Content: View>: View {
                             content.scaleEffect(selected && phase == .lifted ? 1.12 : 1)
                         } animation: { $0.animation }
                         .frame(maxWidth: widthFor(item, selected) ?? .infinity, minHeight: height)
-                        .padding(.horizontal, 4)
+                        .padding(.horizontal, fitToLabels ? 8 : 4)
                         .background {
                             ZStack {
                                 if hover.item == item && !selected {
@@ -47,14 +65,7 @@ struct LiquidSegmented<Item: Hashable & Identifiable, Content: View>: View {
                 .onHover { inside in
                     if inside { hover.item = item } else if hover.item == item { hover.item = nil }
                 }
-            }
         }
-        .background { if let selection { pill(following: selection) } }
-        .padding(3)
-        .background(Capsule().fill(Color.primary.opacity(0.07)))
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-        .animation(.spring(response: 0.42, dampingFraction: 0.72), value: selection)
-        .animation(.easeOut(duration: 0.15), value: hover.item)
     }
 
     /// A single persistent pill (so its bubble animation runs on every change) that tracks the
@@ -82,6 +93,30 @@ struct LiquidSegmented<Item: Hashable & Identifiable, Content: View>: View {
 
 /// `settled` looks like `resting`, so the pill ends at rest whether the animator stops on the
 /// last phase or returns to the first.
+/// Lays children out in a row at their ideal widths plus an equal share of the spare width.
+/// If the labels don't fit, every segment shrinks by the same proportion instead.
+private struct EvenGapsLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let ideals = subviews.map { $0.sizeThatFits(.unspecified) }
+        return CGSize(width: proposal.width ?? ideals.reduce(0) { $0 + $1.width },
+                      height: ideals.map(\.height).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let ideals = subviews.map { $0.sizeThatFits(.unspecified).width }
+        let total = ideals.reduce(0, +)
+        let extra = (bounds.width - total) / CGFloat(subviews.count)
+        var x = bounds.minX
+        for (subview, ideal) in zip(subviews, ideals) {
+            let width = extra >= 0 ? ideal + extra : ideal * bounds.width / total
+            subview.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading,
+                          proposal: ProposedViewSize(width: width, height: bounds.height))
+            x += width
+        }
+    }
+}
+
 private enum BubblePhase: CaseIterable {
     case resting, lifted, settled
 
