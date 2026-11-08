@@ -13,6 +13,11 @@ on OnePlus Buds 4, without the phone app.</p>
   (Smart, Max, Moderate, Mild), in a compact Liquid Glass popover.
 - **Battery at a glance:** the menu bar icon is ringed by the earbuds' battery level; the popover shows
   left, right and case.
+- **More controls** behind the ⌄ arrow:
+  - **Equalizer:** the built-in presets (Balanced, Vocal, Bass) and your custom EQ, with six band sliders
+  - **Low latency** mode for games and video
+  - **Find my earbuds:** play a loud sound to locate them
+  - **Gestures:** pick what double tap, triple tap and touch & hold do on each bud
 - **Global keyboard shortcuts:** cycle modes or jump straight to one from any app, with an on-screen HUD.
   No Accessibility permission needed.
 - **Automatic reconnect:** when the buds come out of the case and only rejoin your phone, Buds Control
@@ -89,7 +94,11 @@ Replies use the request command with the high bit set (`0x0106` → `0x8106`).
 | `0x0112` | paired devices (multipoint) |
 | `0x0205 [09 …]` | subscribe to pushes (battery, wear, noise mode, game mode, multipoint) |
 | `0x0204` | push from the buds; first byte is the subscription type |
-| `0x0403 [id, on]` | switch a feature (e.g. `06` game mode) |
+| `0x0108` / `0x0401 [01 side 01 gesture action]` | read / set touch gestures |
+| `0x010D [n ids…]` / `0x0403 [id on]` | read / set on-off features (`06` = low latency) |
+| `0x010F` / `0x0406 [id]` | read / set the EQ preset |
+| `0x0122 [01 05]` / `0x0418 [02 …]` | list / rewrite custom EQs (bands as Hz + gain) |
+| `0x0400 [01 \| 00]` | start / stop the find-my-earbuds sound |
 | `0x0404 [01 01 <mask>]` | set noise mode |
 
 On the Buds 4, mask bit 0 is off, bit 1 is ANC, bit 2 is transparency, bit 4 is max, bit 5 is moderate,
@@ -102,8 +111,10 @@ bit 6 is mild and bit 7 is smart.
   for Noctalia by osp54 (MIT License, Copyright (c) 2026 osp54).
 - Push subscriptions, wear status and multipoint commands were documented by the OPPO headphones support in
   [Gadgetbridge](https://codeberg.org/Freeyourgadget/Gadgetbridge).
+- EQ, feature-switch and gesture command details come from the HeyMelody RFCOMM port in
+  [RawS-Music](https://github.com/QFDY-GZC/RawS-Music) (Apache License 2.0).
 
-No code was copied from either project; Buds Control is an independent Swift implementation.
+No code was copied from any of these projects; Buds Control is an independent Swift implementation.
 
 ## Disclaimer
 

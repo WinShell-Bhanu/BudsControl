@@ -18,6 +18,20 @@ enum Command {
     static let multipointQuery: UInt16 = 0x0112
     static let multipointSet: UInt16 = 0x040B
     static let statusPush: UInt16 = 0x0204
+    // Command numbers below are from Gadgetbridge's OPPO support and RawS-Music's HeyMelody port.
+    static let findBuds: UInt16 = 0x0400
+    static let gestureQuery: UInt16 = 0x0108
+    static let setGesture: UInt16 = 0x0401
+    static let switchQuery: UInt16 = 0x010D
+    static let eqQuery: UInt16 = 0x010F
+    static let eqListQuery: UInt16 = 0x0122
+    static let setEQ: UInt16 = 0x0406
+    static let setCustomEQ: UInt16 = 0x0418
+}
+
+/// On/off features set with 0x0403 [id, on] and read with 0x010D [count, ids...].
+enum Feature {
+    static let lowLatency: UInt8 = 6  // HeyMelody "game mode"
 }
 
 struct Frame {
@@ -179,11 +193,102 @@ enum NoiseLayouts {
         case 6: "Voice enhancement"
         case 7: "ANC · Smart"
         case 8: "ANC · Moderate"
+        case 10: "ANC · Adaptive"
         default: "Unknown (type \(type))"
         }
     }
 
     static func levels(in layout: [Int: Int]) -> [ANCLevel] {
         ANCLevel.allCases.filter { layout.values.contains($0.modeType) }
+    }
+}
+
+// MARK: - Equalizer
+
+struct EQPreset: Identifiable, Hashable {
+    let id: UInt8
+    let name: String
+}
+
+/// A user EQ stored on the buds: bands of (frequency in Hz, gain in dB) within min...max dB.
+struct CustomEQ: Equatable {
+    var id: UInt8
+    var name: String
+    var minGain: Int
+    var maxGain: Int
+    var bands: [(hz: Int, gain: Int)]
+
+    static func == (a: CustomEQ, b: CustomEQ) -> Bool {
+        a.id == b.id && a.name == b.name && a.minGain == b.minGain && a.maxGain == b.maxGain
+            && a.bands.map(\.hz) == b.bands.map(\.hz) && a.bands.map(\.gain) == b.bands.map(\.gain)
+    }
+}
+
+enum EQPresets {
+    /// Built-in presets are fixed in firmware and not reported by the buds; IDs and names per model
+    /// (from HeyMelody's tables via RawS-Music). Custom EQs come from the buds themselves (0x8122).
+    static let byProduct: [String: [EQPreset]] = [
+        NoiseLayouts.onePlusBuds4: [
+            EQPreset(id: 0, name: "Balanced"),
+            EQPreset(id: 1, name: "Vocal"),
+            EQPreset(id: 2, name: "Bass"),
+        ],
+    ]
+}
+
+// MARK: - Gestures
+
+enum EarSide: UInt8, CaseIterable, Identifiable {
+    case left = 1, right = 2
+    var id: UInt8 { rawValue }
+    var title: String { self == .left ? "Left" : "Right" }
+}
+
+/// Touch gestures in the music context. On the wire a gesture is two bytes: context (01 = music,
+/// 06 = during a call) then the gesture code.
+enum Gesture: UInt8, CaseIterable, Identifiable {
+    case doubleTap = 2, tripleTap = 3, hold = 4
+    var id: UInt8 { rawValue }
+
+    var title: String {
+        switch self {
+        case .doubleTap: "Double tap"
+        case .tripleTap: "Triple tap"
+        case .hold: "Touch & hold"
+        }
+    }
+}
+
+enum GestureAction: UInt8, CaseIterable, Identifiable {
+    case none = 0x00, playPause = 0x01, assistant = 0x03, previous = 0x05, next = 0x06
+    case noiseControl = 0x08, volumeUp = 0x0B, volumeDown = 0x0C, lowLatency = 0x11
+    var id: UInt8 { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: "None"
+        case .playPause: "Play / Pause"
+        case .assistant: "Voice assistant"
+        case .previous: "Previous track"
+        case .next: "Next track"
+        case .noiseControl: "Noise control"
+        case .volumeUp: "Volume up"
+        case .volumeDown: "Volume down"
+        case .lowLatency: "Low latency"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .none: "nosign"
+        case .playPause: "playpause.fill"
+        case .assistant: "mic.fill"
+        case .previous: "backward.fill"
+        case .next: "forward.fill"
+        case .noiseControl: "waveform"
+        case .volumeUp: "speaker.plus.fill"
+        case .volumeDown: "speaker.minus.fill"
+        case .lowLatency: "gamecontroller.fill"
+        }
     }
 }

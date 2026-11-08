@@ -37,7 +37,12 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
     @Published private(set) var left: Battery?
     @Published private(set) var right: Battery?
     @Published private(set) var caseBattery: Battery?
+    /// Low-latency ("game") mode.
     @Published private(set) var gameMode: Bool?
+    @Published private(set) var eqID: UInt8?
+    @Published private(set) var customEQs: [CustomEQ] = []
+    @Published private(set) var gestures: [EarSide: [Gesture: GestureAction]] = [:]
+    @Published private(set) var findingBuds = false
     @Published private(set) var hosts: [Host] = []
     @Published private(set) var wear: [Int: Wear] = [:]  // 1 left, 2 right
     @Published private(set) var channelID: BluetoothRFCOMMChannelID?
@@ -45,6 +50,12 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
 
     var layout: [Int: Int] { NoiseLayouts.layout(for: productID) }
     var availableLevels: [ANCLevel] { NoiseLayouts.levels(in: layout) }
+    /// Built-in presets for this model followed by the custom EQs stored on the buds.
+    var eqChoices: [EQPreset] {
+        (EQPresets.byProduct[productID ?? NoiseLayouts.onePlusBuds4] ?? [])
+            + customEQs.map { EQPreset(id: $0.id, name: $0.name) }
+    }
+    var activeCustomEQ: CustomEQ? { customEQs.first { $0.id == eqID } }
     /// Lowest earbud level, for the menu bar ring.
     var budsBattery: Int? { [left?.level, right?.level].compactMap { $0 }.min() }
 
@@ -53,6 +64,8 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
     enum LogDirection { case sent, received, info }
     /// Called whenever the multipoint host list changes.
     var onHostsChange: (([Host]) -> Void)?
+    /// Every decoded frame from the buds (developer tooling).
+    var onFrame: ((Frame) -> Void)?
 
     // HeyMelody's SPP service UUID; the RFCOMM channel is read from its SDP record when available.
     private static let serviceUUID = IOBluetoothSDPUUID(bytes: [
@@ -78,6 +91,7 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
     private var openingChannelID: BluetoothRFCOMMChannelID?
     private var connectingWatchdog: DispatchWorkItem?
     private var lastPage = Date.distantPast
+    private var findTimer: Timer?
 
     /// Whether to reconnect the buds to this Mac when they're around but connected elsewhere only.
     var autoConnect: () -> Bool = { UserDefaults.standard.object(forKey: "autoConnect") as? Bool ?? true }
@@ -186,7 +200,53 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
     /// Developer: low-latency "game mode" switch (misc config 0x06).
     func setGameMode(_ on: Bool) {
         gameMode = on
-        send(Command.setSwitch, [0x06, on ? 1 : 0])
+        send(Command.setSwitch, [Feature.lowLatency, on ? 1 : 0])
+        expectReply()
+    }
+
+    func setEQ(_ id: UInt8) {
+        eqID = id
+        send(Command.setEQ, [id])
+        expectReply()
+    }
+
+    /// Rewrites the active custom EQ's band gains (HeyMelody setEqInfo, action 2 = apply existing).
+    /// Payload: 02 <min> <max> <id> <name len> <name> <band count> (<Hz lo> <Hz hi> <gain>)*
+    func setCustomEQ(gains: [Int]) {
+        guard var eq = activeCustomEQ ?? customEQs.first,
+              let index = customEQs.firstIndex(where: { $0.id == eq.id }) else { return }
+        for i in eq.bands.indices where i < gains.count {
+            eq.bands[i].gain = min(max(gains[i], eq.minGain), eq.maxGain)
+        }
+        customEQs[index] = eq
+        eqID = eq.id
+        let name = Array(eq.name.utf8.prefix(255))
+        var payload: [UInt8] = [0x02, UInt8(bitPattern: Int8(eq.minGain)), UInt8(bitPattern: Int8(eq.maxGain)), eq.id,
+                                UInt8(name.count)]
+        payload += name
+        payload.append(UInt8(eq.bands.count))
+        for band in eq.bands {
+            payload += [UInt8(band.hz & 0xFF), UInt8((band.hz >> 8) & 0xFF), UInt8(bitPattern: Int8(band.gain))]
+        }
+        send(Command.setCustomEQ, payload)
+        expectReply()
+    }
+
+    /// Plays the buds' locator sound. It's loud; it stops by itself after 30 s.
+    func findBuds(_ start: Bool) {
+        findingBuds = start
+        send(Command.findBuds, [start ? 1 : 0])
+        findTimer?.invalidate()
+        if start {
+            findTimer = Self.timer(30, repeats: false) { [weak self] in self?.findBuds(false) }
+        }
+    }
+
+    /// Payload: 01 <side> <context 01 = music> <gesture> <action>
+    func setGesture(_ action: GestureAction, for gesture: Gesture, side: EarSide) {
+        gestures[side, default: [:]][gesture] = action
+        send(Command.setGesture, [0x01, side.rawValue, 0x01, gesture.rawValue, action.rawValue])
+        expectReply()
     }
 
     func queryHosts() { send(Command.multipointQuery) }
@@ -402,6 +462,10 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
         send(Command.subscribe, [0x09, 0x01, 0x02, 0x03, 0x05, 0x06])
         send(Command.wearStatus)
         send(Command.multipointQuery)
+        send(Command.eqQuery)
+        send(Command.eqListQuery, [0x01, 0x05])
+        send(Command.switchQuery, [0x01, Feature.lowLatency])
+        send(Command.gestureQuery)
         refresh()
     }
 
@@ -439,6 +503,7 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
     }
 
     private func handle(_ frame: Frame) {
+        onFrame?(frame)
         let p = frame.payload
         switch frame.command {
         case Command.productID | 0x8000:
@@ -459,6 +524,29 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
             queryNoise()
         case Command.setSwitch | 0x8000:
             if p.first != 0 { log?(.info, "switch rejected: \(hex(p))") }
+            send(Command.switchQuery, [0x01, Feature.lowLatency])
+        case Command.switchQuery | 0x8000:
+            parseSwitches(p)
+        case Command.eqQuery | 0x8000:
+            if p.count >= 2, p[0] == 0 { eqID = p[1] }
+        case Command.eqListQuery | 0x8000:
+            parseEQList(p)
+        case Command.setEQ | 0x8000, Command.setCustomEQ | 0x8000:
+            // Read back what the buds actually applied.
+            if p.first != 0 { log?(.info, "EQ change rejected: \(hex(p))") }
+            send(Command.eqQuery)
+            send(Command.eqListQuery, [0x01, 0x05])
+        case Command.gestureQuery | 0x8000:
+            parseGestures(p)
+        case Command.setGesture | 0x8000:
+            if p.first != 0 { log?(.info, "gesture change rejected: \(hex(p))") }
+            send(Command.gestureQuery)
+        case Command.findBuds | 0x8000:
+            // Status 0 accepts a start; the buds answer a stop with 1, so only a start can fail.
+            if findingBuds, p.first != 0 {
+                log?(.info, "find earbuds rejected: \(hex(p))")
+                findingBuds = false
+            }
         case Command.multipointQuery | 0x8000:
             parseHosts(p)
         case Command.multipointSet | 0x8000:
@@ -499,6 +587,59 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
             }
             i += 2
         }
+    }
+
+    /// Payload: <status> <count> (<feature id> <0 off | 1 on>)*
+    private func parseSwitches(_ p: [UInt8]) {
+        guard p.count >= 2, p[0] == 0 else { return }
+        var i = 2
+        for _ in 0..<Int(p[1]) where i + 1 < p.count {
+            if p[i] == Feature.lowLatency { gameMode = p[i + 1] == 1 }
+            i += 2
+        }
+    }
+
+    /// Payload: <status> <count> (<selected> <min dB> <max dB> <id> <name len> <name> <band count>
+    /// (<Hz lo> <Hz hi> <gain dB>)*)*. Only custom EQs are listed; built-in presets aren't.
+    private func parseEQList(_ p: [UInt8]) {
+        guard p.count >= 2, p[0] == 0 else { return }
+        var result: [CustomEQ] = []
+        var i = 2
+        for _ in 0..<Int(p[1]) {
+            guard i + 5 <= p.count else { break }
+            let minGain = Int(Int8(bitPattern: p[i + 1])), maxGain = Int(Int8(bitPattern: p[i + 2]))
+            let id = p[i + 3], nameLen = Int(p[i + 4])
+            i += 5
+            guard i + nameLen < p.count else { break }
+            let name = String(decoding: p[i..<(i + nameLen)], as: UTF8.self)
+            i += nameLen
+            let count = Int(p[i])
+            i += 1
+            guard i + count * 3 <= p.count else { break }
+            let bands = (0..<count).map { n in
+                (hz: Int(p[i + n * 3]) | Int(p[i + n * 3 + 1]) << 8, gain: Int(Int8(bitPattern: p[i + n * 3 + 2])))
+            }
+            i += count * 3
+            result.append(CustomEQ(id: id, name: name.isEmpty ? "Custom" : name, minGain: minGain, maxGain: maxGain,
+                                   bands: bands))
+        }
+        if result != customEQs { customEQs = result }
+    }
+
+    /// Payload: <status> <count> (<side> <context> <gesture> <action>)*. Only music-context
+    /// double tap / triple tap / hold are surfaced; calls and the fixed gestures are left alone.
+    private func parseGestures(_ p: [UInt8]) {
+        guard p.count >= 2, p[0] == 0 else { return }
+        var result: [EarSide: [Gesture: GestureAction]] = [:]
+        var i = 2
+        for _ in 0..<Int(p[1]) where i + 3 < p.count {
+            if let side = EarSide(rawValue: p[i]), p[i + 1] == 0x01, let gesture = Gesture(rawValue: p[i + 2]),
+               let action = GestureAction(rawValue: p[i + 3]) {
+                result[side, default: [:]][gesture] = action
+            }
+            i += 4
+        }
+        gestures = result
     }
 
     /// Payload: <status> <count> (<side> <0 in case | 1 out of ear | 3 in ear>)*
