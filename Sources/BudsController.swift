@@ -809,6 +809,10 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
             parseWear(p)
         case Command.statusPush:
             handlePush(p)
+        case Command.noiseStatusPush:
+            // Buds Pro 3 uses 0x0402 with payload
+            // 03 <field> 01 <mask lo> <mask hi>, rather than 0x0204.
+            parsePro3NoisePush(p)
         case Command.eqPush:
             if let id = p.first {
                 log?(.info, "EQ push: preset \(id)")
@@ -1016,21 +1020,35 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
         guard p.count >= 3 else { return }
         for idx in 0..<(p.count - 2) where p[idx] == 0x01 && p[idx + 1] == 0x01 {
             let mask = Int(p[idx + 2]) | (idx + 3 < p.count ? Int(p[idx + 3]) << 8 : 0)
-            guard mask != 0 else { continue }
-            // Models can report a different bit than the one used to set a mode (Transparency is
-            // set with bit 2 but reported as bit 8 on the Buds 4; Buds Pro 3 report levels in bits
-            // 12-15), so look the bit up in the model's reported layout.
-            let bit = mask.trailingZeroBitCount
-            guard let type = model.reportedBits[bit] else {
-                log?(.info, "unknown noise bit \(bit) for \(productID ?? "unknown model")")
-                return
-            }
-            noiseBit = bit
-            mode = ModeType.mode(type)
-            level = ANCLevel(modeType: type) ?? (mode == .anc ? level : nil)
-            restoreSettings()
-            return
+            if applyReportedNoiseMask(mask) { return }
         }
+    }
+
+    /// Buds Pro 3 reports the active mode as 16-bit values in a 0x0402 push.
+    /// Field 0x01 is the selected mode; field 0x04 is the level currently
+    /// chosen by Adaptive/Auto and must not replace the selected mode.
+    private func parsePro3NoisePush(_ p: [UInt8]) {
+        guard p.count >= 5 else { return }
+        for idx in 0...(p.count - 5)
+        where p[idx] == 0x03, (p[idx + 1] == 0x01 || p[idx + 1] == 0x04), p[idx + 2] == 0x01 {
+            let mask = Int(p[idx + 3]) | (Int(p[idx + 4]) << 8)
+            if p[idx + 1] == 0x01, applyReportedNoiseMask(mask) { return }
+        }
+    }
+
+    @discardableResult
+    private func applyReportedNoiseMask(_ mask: Int) -> Bool {
+        guard mask != 0 else { return false }
+        let bit = mask.trailingZeroBitCount
+        guard let type = model.reportedBits[bit] else {
+            log?(.info, "unknown noise bit \(bit) for \(productID ?? "unknown model")")
+            return false
+        }
+        noiseBit = bit
+        mode = ModeType.mode(type)
+        level = ANCLevel(modeType: type) ?? (mode == .anc ? level : nil)
+        restoreSettings()
+        return true
     }
 
     /// Payload: <status> <count> (<address, reversed> <reserved> <2 = connected> <1 = this host> <name len> <name>)*

@@ -46,6 +46,11 @@ FEATURE_KEYS = {
 # Reported-bit quirks seen on real buds that the whitelist doesn't describe.
 # Buds Pro 3 report their ANC levels in bits 12-15 (from PR #3 by Bhanu, tested on the buds).
 EXTRA_REPORTED_BITS = {"064014": {12: 4, 13: 8, 14: 3, 15: 7}}
+# The Buds Pro 3 writes modes with the compact mask used by the HeyMelody
+# controller; its status notifications use the separate reported-bit map above.
+SET_LAYOUT_OVERRIDES = {
+    "064014": {0: 1, 1: 5, 2: 2, 4: 4, 5: 8, 6: 3, 7: 7},
+}
 
 models = {}
 for block in re.split(r"\n\s*Profile\(", profile_src)[1:]:
@@ -77,6 +82,8 @@ def swift_map(d):
 
 
 def write_layout(pid, m):
+    if pid in SET_LAYOUT_OVERRIDES:
+        return SET_LAYOUT_OVERRIDES[pid]
     if pid in ctl_layouts:
         return ctl_layouts[pid]
     if m["brand"] == "realme":

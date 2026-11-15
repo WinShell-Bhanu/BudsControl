@@ -113,6 +113,7 @@ such as the multipoint device list. Replies use the request command with the hig
 | `0x0112` | paired devices (multipoint) |
 | `0x0205 [count, ids…]` | subscribe to pushes (battery, wear and noise mode) |
 | `0x0204` | push from the buds; first byte is the subscription type |
+| `0x0402` | Buds Pro 3 live noise-mode push (`03 <field> 01 <mask>`) |
 | `0x0108` / `0x0401 [01 side 01 gesture action]` | read / set touch gestures |
 | `0x010D [n ids…]` / `0x0403 [id on]` | read / set on-off features (`06` = low latency) |
 | `0x010F` / `0x0406 [id]` | read / set the EQ preset |
