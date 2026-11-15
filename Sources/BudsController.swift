@@ -1030,7 +1030,9 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
     private func parsePro3NoisePush(_ p: [UInt8]) {
         guard p.count >= 5 else { return }
         for idx in 0...(p.count - 5)
-        where p[idx] == 0x03, (p[idx + 1] == 0x01 || p[idx + 1] == 0x04), p[idx + 2] == 0x01 {
+        where p[idx] == 0x03
+            && (p[idx + 1] == 0x01 || p[idx + 1] == 0x04)
+            && p[idx + 2] == 0x01 {
             let mask = Int(p[idx + 3]) | (Int(p[idx + 4]) << 8)
             if p[idx + 1] == 0x01, applyReportedNoiseMask(mask) { return }
         }
