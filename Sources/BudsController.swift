@@ -431,7 +431,10 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
 
     private static func isBudsPro3(_ d: IOBluetoothDevice) -> Bool {
         let name = (d.name ?? "").lowercased()
-        return name.contains("buds pro 3") || name.contains("buds3")
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+        let compact = name.replacingOccurrences(of: " ", with: "")
+        return name.contains("buds pro 3") || compact.contains("budspro3") || compact.contains("buds3")
     }
 
     private static func hasControlService(_ d: IOBluetoothDevice) -> Bool {
