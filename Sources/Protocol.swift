@@ -18,6 +18,8 @@ enum Command {
     static let multipointQuery: UInt16 = 0x0112
     static let multipointSet: UInt16 = 0x040B
     static let statusPush: UInt16 = 0x0204
+    /// Buds Pro 3 sends live ANC state on this feature-push command.
+    static let noiseStatusPush: UInt16 = 0x0402
     // Command numbers below are from Gadgetbridge's OPPO support and RawS-Music's HeyMelody port.
     static let findBuds: UInt16 = 0x0400
     static let gestureQuery: UInt16 = 0x0108

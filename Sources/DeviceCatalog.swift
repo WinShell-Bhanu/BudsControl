@@ -262,7 +262,7 @@ extension DeviceCatalog {
                              features: nil),
         "064014": DeviceModel(name: "OnePlus Buds Pro 3", brand: .oneplus,
                              modeTypes: [1, 2, 3, 4, 7, 8],
-                             setBits: [0: 1, 1: 5, 2: 2, 3: 1, 4: 4, 5: 8, 6: 3, 7: 7, 8: 2],
+                             setBits: [0: 1, 1: 5, 2: 2, 4: 4, 5: 8, 6: 3, 7: 7],
                              reportedBits: [0: 1, 1: 5, 2: 2, 3: 1, 4: 4, 5: 8, 6: 3, 7: 7, 8: 2, 12: 4, 13: 8, 14: 3, 15: 7],
                              eqPresets: [(0, 11), (1, 13), (2, 14), (3, 12), (7, 30)],
                              features: [.customEQ, .equalizer, .findBuds, .gestures, .lowLatency, .noiseControl]),
