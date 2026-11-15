@@ -429,6 +429,11 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
         return ["oneplus", "oppo", "enco", "realme", "dizo"].contains { name.contains($0) }
     }
 
+    private static func isBudsPro3(_ d: IOBluetoothDevice) -> Bool {
+        let name = (d.name ?? "").lowercased()
+        return name.contains("buds pro 3") || name.contains("buds3")
+    }
+
     private static func hasControlService(_ d: IOBluetoothDevice) -> Bool {
         let records = (d.services as? [IOBluetoothSDPServiceRecord]) ?? []
         return records.contains { ($0.getServiceName() ?? "").lowercased().contains("enco") }
@@ -469,7 +474,12 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
             var id: BluetoothRFCOMMChannelID = 0
             if record.getRFCOMMChannelID(&id) == kIOReturnSuccess, !channels.contains(id) { channels.append(id) }
         }
-        if channels.isEmpty {
+        // Buds Pro 3 can expose a stale/auxiliary SDP channel (commonly 24). It opens
+        // successfully but never carries the HeyMelody control protocol; channel 15 is
+        // the actual control endpoint.
+        if Self.isBudsPro3(buds) {
+            channels = [15]
+        } else if channels.isEmpty {
             channels = Self.fallbackChannels
             buds.performSDPQuery(nil)  // refresh the records for the next attempt
         }
@@ -522,6 +532,7 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
 
     private func closeChannel() {
         watchdog?.cancel()
+        connectingWatchdog?.cancel()
         channel?.setDelegate(nil)
         channel?.close()
         channel = nil
@@ -634,6 +645,8 @@ final class BudsController: NSObject, ObservableObject, IOBluetoothRFCOMMChannel
     private func didOpen(_ rfcommChannel: IOBluetoothRFCOMMChannel) {
         guard !(link == .connected && channelID == rfcommChannel.getID()) else { return }
         log?(.info, "connected on channel \(rfcommChannel.getID())")
+        connectingWatchdog?.cancel()
+        pendingChannels.removeAll()
         channelID = rfcommChannel.getID()
         link = .connected
         retryCount = 0
